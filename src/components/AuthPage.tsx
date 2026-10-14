@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { auth, googleProvider, signInAnonymously } from '../lib/firebase';
 import { signInWithPopup } from 'firebase/auth';
+import { syncUserProfile } from '../services/firestoreService';
 
 interface AuthPageProps {
   onLoginSuccess: (user: any) => void;
@@ -33,6 +34,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
     try {
       // First attempt standard popup authentication
       const result = await signInWithPopup(auth, googleProvider);
+      await syncUserProfile(result.user);
       onLoginSuccess(result.user);
     } catch (err: any) {
       console.warn('Google sign-in popup restriction detected in sandbox environment, seamlessly continuing sign-in:', err);
@@ -55,6 +57,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
         photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nameInput || cleanEmail)}`,
       };
 
+      await syncUserProfile(seamlessUser);
       onLoginSuccess(seamlessUser);
     } finally {
       setLoading(false);
@@ -89,6 +92,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onLoginSuccess }) => {
         photoURL: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(nameInput || cleanEmail)}`,
       };
 
+      await syncUserProfile(directUser);
       onLoginSuccess(directUser);
     } finally {
       setLoading(false);

@@ -41,7 +41,12 @@ import {
   subscribeToCollaboratorPresence,
   updateCollaboratorPresence,
   removeCollaboratorPresence,
-  UserPresence
+  UserPresence,
+  SpreadsheetCollaborator,
+  CollaboratorRole,
+  addCollaboratorToSpreadsheet,
+  removeCollaboratorFromSpreadsheet,
+  syncUserProfile
 } from './services/firestoreService';
 import Papa from 'papaparse';
 
@@ -79,7 +84,7 @@ export default function App() {
   const [activeSpreadsheetId, setActiveSpreadsheetId] = useState<string | null>(null);
 
   const [title, setTitle] = useState('Untitled Spreadsheet');
-  const [activeRole, setActiveRole] = useState<'owner' | 'editor' | 'viewer'>('owner');
+  const [activeRole, setActiveRole] = useState<CollaboratorRole>('owner');
 
   const [sheets, setSheets] = useState<string[]>(['Sheet1', 'Sheet2']);
   const [activeSheet, setActiveSheet] = useState<string>('Sheet1');
@@ -175,7 +180,7 @@ export default function App() {
   };
 
   // Collaborators & Audit logs
-  const [collaborators, setCollaborators] = useState<Array<{ email: string; role: 'owner' | 'editor' | 'commenter' | 'viewer' }>>([
+  const [collaborators, setCollaborators] = useState<SpreadsheetCollaborator[]>([
     { email: 'arijitpyke123@gmail.com', role: 'owner' },
   ]);
   const [isPublic, setIsPublic] = useState(true);
@@ -202,6 +207,7 @@ export default function App() {
         unsubscribe = onAuthStateChanged(auth, (currentUser) => {
           if (currentUser) {
             setUser(currentUser);
+            syncUserProfile(currentUser);
             try {
               localStorage.setItem('omnisheet_active_user', JSON.stringify({
                 uid: currentUser.uid,
@@ -212,7 +218,7 @@ export default function App() {
             } catch {}
             if (currentUser.email) {
               setCollaborators(prev => {
-                if (!prev.some(c => c.email === currentUser.email)) {
+                if (!prev.some(c => c.email.toLowerCase() === currentUser.email!.toLowerCase())) {
                   return [...prev, { email: currentUser.email!, role: 'owner' }];
                 }
                 return prev;
@@ -250,6 +256,28 @@ export default function App() {
             }
           }
           if (loaded.isPublic !== undefined) setIsPublic(loaded.isPublic);
+
+          if (loaded.collaborators && loaded.collaborators.length > 0) {
+            setCollaborators(loaded.collaborators);
+          }
+
+          // Determine current user's effective RBAC role
+          const userEmail = (user.email || '').toLowerCase();
+          if (user.uid === loaded.ownerId || (loaded.ownerEmail && userEmail === loaded.ownerEmail.toLowerCase())) {
+            setActiveRole('owner');
+          } else {
+            const matched = (loaded.collaborators || []).find(
+              c => (userEmail && c.email.toLowerCase() === userEmail) || (c.userId && c.userId === user.uid)
+            );
+            if (matched) {
+              setActiveRole(matched.role);
+            } else if (loaded.isPublic) {
+              setActiveRole('editor');
+            } else {
+              setActiveRole('viewer');
+            }
+          }
+
           setLastSavedAt(new Date().toLocaleTimeString());
         }
       } catch (err) {
@@ -364,6 +392,11 @@ export default function App() {
   const currentCells = allSheetCells[activeSheet] || {};
 
   const handleCellChange = (cellKey: string, value: string, formula?: string) => {
+    if (activeRole === 'viewer') {
+      setQuotaAlertMessage('You have Viewer (read-only) permissions for this shared spreadsheet. Cell edits are disabled.');
+      return;
+    }
+
     const currentTenant = user?.uid || 'guest';
     const newQuota = tenantRateLimiter.consumeQuota(currentTenant, tenantPlanId, 1);
     setQuotaStatus(newQuota);
@@ -410,6 +443,11 @@ export default function App() {
 
   // 5. Operations on Selected Cells (Multi-Cell batch formatting & clearing)
   const handleFormat = (styleKey: string, val: any) => {
+    if (activeRole === 'viewer') {
+      setQuotaAlertMessage('You have Viewer (read-only) permissions for this shared spreadsheet. Formatting is disabled.');
+      return;
+    }
+
     const targets = getSelectedTargetCells();
     const currentTenant = user?.uid || 'guest';
     const newQuota = tenantRateLimiter.consumeQuota(currentTenant, tenantPlanId, targets.length);
@@ -722,6 +760,21 @@ export default function App() {
         onOpenRenderDeploy={() => setIsRenderDeployOpen(true)}
       />
 
+      {/* Viewer Mode RBAC Banner */}
+      {activeRole === 'viewer' && (
+        <div className="flex items-center justify-between px-6 py-2 bg-purple-950/80 border-b border-purple-800 text-xs text-purple-200">
+          <div className="flex items-center gap-2">
+            <span className="flex h-2 w-2 rounded-full bg-purple-400 animate-pulse" />
+            <span>
+              <strong>Viewer Mode (Read Only):</strong> You have viewer permissions for this shared spreadsheet. Cell edits and formula changes are disabled.
+            </span>
+          </div>
+          <span className="font-mono text-[10px] px-2.5 py-0.5 rounded-full bg-purple-900 border border-purple-700 text-purple-200 font-bold">
+            RBAC: Viewer
+          </span>
+        </div>
+      )}
+
       <Toolbar
         onFormat={handleFormat}
         onInsertFormula={handleInsertFormula}
@@ -854,8 +907,21 @@ export default function App() {
       <ShareModal
         isOpen={isShareOpen}
         onClose={() => setIsShareOpen(false)}
+        spreadsheetId={activeSpreadsheetId}
+        currentUser={user}
         collaborators={collaborators}
-        onAddCollaborator={(email, role) => setCollaborators(prev => [...prev, { email, role }])}
+        onAddCollaborator={async (collab) => {
+          if (!activeSpreadsheetId) return;
+          const res = await addCollaboratorToSpreadsheet(activeSpreadsheetId, collab, user?.displayName || user?.email);
+          if (res.success) {
+            setCollaborators(res.collaborators);
+          }
+        }}
+        onRemoveCollaborator={async (collabEmail) => {
+          if (!activeSpreadsheetId) return;
+          const updated = await removeCollaboratorFromSpreadsheet(activeSpreadsheetId, collabEmail);
+          setCollaborators(updated);
+        }}
         isPublic={isPublic}
         setIsPublic={(val) => {
           setIsPublic(val);

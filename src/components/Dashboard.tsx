@@ -18,13 +18,22 @@ import {
   Moon,
   Zap,
   ShieldCheck,
-  Rocket
+  Rocket,
+  Users,
+  Eye,
+  Edit3,
+  MessageSquare,
+  Share2,
+  Lock
 } from 'lucide-react';
 import { 
   SpreadsheetMeta, 
   listSpreadsheets, 
+  listSharedSpreadsheets,
   createNewSpreadsheet, 
-  deleteSpreadsheet 
+  deleteSpreadsheet,
+  syncUserProfile,
+  CollaboratorRole
 } from '../services/firestoreService';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWA';
 import { SheetCells } from '../utils/formulaEngine';
@@ -188,6 +197,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onOpenRenderDeploy,
 }) => {
   const [spreadsheets, setSpreadsheets] = useState<SpreadsheetMeta[]>([]);
+  const [sharedSpreadsheets, setSharedSpreadsheets] = useState<SpreadsheetMeta[]>([]);
+  const [activeTab, setActiveTab] = useState<'all' | 'owned' | 'shared'>('all');
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [creating, setCreating] = useState(false);
@@ -198,18 +209,31 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const fetchSheets = async () => {
     setLoading(true);
     try {
-      let list = await listSpreadsheets(user?.uid || 'user');
-      if (list.length === 0 && user?.uid) {
+      if (user?.uid) {
+        await syncUserProfile(user);
+      }
+
+      const [ownedList, sharedList] = await Promise.all([
+        listSpreadsheets(user?.uid || 'user'),
+        listSharedSpreadsheets(user)
+      ]);
+
+      if (ownedList.length === 0 && user?.uid) {
         // Auto-seed a user-specific starter sheet so each user has their own sheet
         await createNewSpreadsheet(
           `${user.displayName || 'Personal'} Financial Plan`,
           user.uid,
           user.displayName || user.email?.split('@')[0] || 'User',
-          TEMPLATES[1].initialData
+          TEMPLATES[1].initialData,
+          user.email
         );
-        list = await listSpreadsheets(user.uid);
+        const refreshedOwned = await listSpreadsheets(user.uid);
+        setSpreadsheets(refreshedOwned);
+      } else {
+        setSpreadsheets(ownedList);
       }
-      setSpreadsheets(list);
+
+      setSharedSpreadsheets(sharedList);
     } catch (err) {
       console.warn('Load sheets list warning:', err);
     } finally {
@@ -228,7 +252,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         tmpl.id === 'blank' ? 'Untitled Spreadsheet' : tmpl.title,
         user.uid,
         user.displayName || user.email?.split('@')[0] || 'User',
-        tmpl.initialData
+        tmpl.initialData,
+        user.email
       );
       onOpenSpreadsheet(newId);
     } catch (e) {
@@ -246,9 +271,42 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const filteredSheets = spreadsheets.filter(s => 
-    s.title.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filterSheetList = (list: SpreadsheetMeta[]) => {
+    return list.filter(s => s.title.toLowerCase().includes(searchQuery.toLowerCase()));
+  };
+
+  const filteredOwned = filterSheetList(spreadsheets);
+  const filteredShared = filterSheetList(sharedSpreadsheets);
+
+  const renderRoleBadge = (role?: CollaboratorRole) => {
+    switch (role) {
+      case 'owner':
+        return (
+          <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+            <ShieldCheck className="h-3 w-3" /> Owner
+          </span>
+        );
+      case 'editor':
+        return (
+          <span className="flex items-center gap-1 rounded-full bg-blue-500/10 border border-blue-500/30 px-2 py-0.5 text-[10px] font-bold text-blue-400">
+            <Edit3 className="h-3 w-3" /> Editor (Full Edit)
+          </span>
+        );
+      case 'commenter':
+        return (
+          <span className="flex items-center gap-1 rounded-full bg-amber-500/10 border border-amber-500/30 px-2 py-0.5 text-[10px] font-bold text-amber-400">
+            <MessageSquare className="h-3 w-3" /> Commenter
+          </span>
+        );
+      case 'viewer':
+      default:
+        return (
+          <span className="flex items-center gap-1 rounded-full bg-purple-500/10 border border-purple-500/30 px-2 py-0.5 text-[10px] font-bold text-purple-400">
+            <Eye className="h-3 w-3" /> Viewer (Read Only)
+          </span>
+        );
+    }
+  };
 
   return (
     <div className={`min-h-screen w-screen font-sans flex flex-col selection:bg-emerald-500 selection:text-white transition-colors ${
@@ -278,7 +336,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search your spreadsheets in Firestore..."
+              placeholder="Search your spreadsheets and shared sheets in Firestore..."
               className={`w-full rounded-xl py-2 pl-10 pr-4 text-xs placeholder-slate-400 border focus:outline-none focus:ring-2 focus:ring-emerald-500 transition ${
                 isDark 
                   ? 'bg-slate-950 text-white border-slate-800' 
@@ -386,7 +444,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl mx-auto w-full px-6 py-8 space-y-8">
-        {/* Tenant Quotas & Netflix Rate Limiter Banner */}
+        {/* Tenant Quotas Banner */}
         {quotaStatus && (
           <div className={`flex flex-wrap items-center justify-between gap-4 p-4 rounded-2xl border shadow-sm ${
             isDark 
@@ -409,7 +467,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   </span>
                 </div>
                 <p className={`text-xs mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-600'}`}>
-                  Your tenant has <strong>{quotaStatus.remaining}</strong> of {quotaStatus.total} edits remaining this hour. Higher tier plans provide higher edit rates.
+                  Your tenant has <strong>{quotaStatus.remaining}</strong> of {quotaStatus.total} edits remaining this hour.
                 </p>
               </div>
             </div>
@@ -466,109 +524,253 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
         </section>
 
-        {/* Spreadsheets List: Recent Spreadsheets */}
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <h2 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${
-                isDark ? 'text-slate-400' : 'text-slate-500'
-              }`}>
-                <Layers className="h-4 w-4 text-sky-500" />
-                Your Spreadsheets
-              </h2>
-              <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold border ${
-                isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-700 border-slate-200'
-              }`}>
-                {spreadsheets.length}
+        {/* Navigation Tabs (All / Owned / Shared) */}
+        <div className="flex items-center justify-between border-b pb-3 border-slate-800/80">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setActiveTab('all')}
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition ${
+                activeTab === 'all'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : isDark ? 'text-slate-400 hover:text-white hover:bg-slate-900' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <span>All Spreadsheets</span>
+              <span className="rounded-full px-1.5 py-0.2 bg-black/20 text-[10px]">
+                {spreadsheets.length + sharedSpreadsheets.length}
               </span>
-            </div>
+            </button>
 
             <button
-              onClick={fetchSheets}
-              className={`text-xs transition hover:text-emerald-500 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}
+              onClick={() => setActiveTab('owned')}
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition ${
+                activeTab === 'owned'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : isDark ? 'text-slate-400 hover:text-white hover:bg-slate-900' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
             >
-              Refresh
+              <Layers className="h-3.5 w-3.5" />
+              <span>Owned by You</span>
+              <span className="rounded-full px-1.5 py-0.2 bg-black/20 text-[10px]">
+                {spreadsheets.length}
+              </span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('shared')}
+              className={`flex items-center gap-2 rounded-xl px-3.5 py-1.5 text-xs font-bold transition ${
+                activeTab === 'shared'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : isDark ? 'text-slate-400 hover:text-white hover:bg-slate-900' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              <Users className="h-3.5 w-3.5 text-sky-400" />
+              <span>Shared with You</span>
+              <span className="rounded-full px-1.5 py-0.2 bg-sky-500/20 text-sky-300 text-[10px]">
+                {sharedSpreadsheets.length}
+              </span>
             </button>
           </div>
 
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
-              <p className="text-xs">Loading your spreadsheets from Firestore...</p>
+          <button
+            onClick={fetchSheets}
+            className={`text-xs transition hover:text-emerald-500 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}
+          >
+            Refresh Firestore Data
+          </button>
+        </div>
+
+        {/* SECTION 1: SHARED WITH YOU (Prominently displayed) */}
+        {(activeTab === 'all' || activeTab === 'shared') && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h2 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${
+                  isDark ? 'text-sky-400' : 'text-sky-600'
+                }`}>
+                  <Share2 className="h-4 w-4" />
+                  Shared with You (RBAC Access)
+                </h2>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold border ${
+                  isDark ? 'bg-sky-950/60 text-sky-300 border-sky-800/60' : 'bg-sky-50 text-sky-700 border-sky-200'
+                }`}>
+                  {sharedSpreadsheets.length} shared
+                </span>
+              </div>
             </div>
-          ) : filteredSheets.length === 0 ? (
-            <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed py-16 px-6 text-center ${
-              isDark ? 'bg-slate-900/40 border-slate-800' : 'bg-white border-slate-300'
-            }`}>
-              <FolderOpen className="h-12 w-12 text-slate-400 mb-3" />
-              <h3 className="text-base font-bold">No spreadsheets found</h3>
-              <p className={`text-xs max-w-sm mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
-                {searchQuery ? `No results match "${searchQuery}".` : 'Create your first sheet using the template gallery above.'}
-              </p>
-              <button
-                onClick={() => handleCreateFromTemplate(TEMPLATES[0])}
-                className="mt-5 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-500 transition"
-              >
-                <Plus className="h-4 w-4" />
-                Create Blank Spreadsheet
-              </button>
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {filteredSheets.map((sheet) => (
-                <div
-                  key={sheet.id}
-                  onClick={() => onOpenSpreadsheet(sheet.id)}
-                  className={`flex flex-col justify-between rounded-2xl border cursor-pointer transition-all duration-200 p-4 group ${
-                    isDark 
-                      ? 'bg-slate-900 border-slate-800 hover:border-emerald-500/50 hover:bg-slate-900/90 hover:shadow-xl hover:shadow-emerald-950/20' 
-                      : 'bg-white border-slate-200 hover:border-emerald-500 hover:shadow-md shadow-xs'
-                  }`}
-                >
-                  {/* Top Preview Card */}
-                  <div>
-                    <div className="flex items-center justify-between mb-3">
-                      <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
-                        isDark 
-                          ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/50' 
-                          : 'bg-emerald-50 text-emerald-600 border-emerald-200'
-                      }`}>
-                        <FileSpreadsheet className="h-5 w-5" />
+
+            {loading ? (
+              <div className="py-8 text-center text-xs text-slate-400">Loading shared documents...</div>
+            ) : filteredShared.length === 0 ? (
+              activeTab === 'shared' || sharedSpreadsheets.length === 0 ? (
+                <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed py-10 px-6 text-center ${
+                  isDark ? 'bg-slate-900/40 border-slate-800' : 'bg-white border-slate-300'
+                }`}>
+                  <Users className="h-10 w-10 text-slate-500 mb-2.5" />
+                  <h3 className="text-sm font-bold">No spreadsheets shared with you yet</h3>
+                  <p className={`text-xs max-w-md mt-1 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                    When other team members or Firestore users invite you to their spreadsheets, they will immediately appear in this section with your assigned RBAC role (<strong>Editor</strong>, <strong>Viewer</strong>, or <strong>Commenter</strong>).
+                  </p>
+                </div>
+              ) : null
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {filteredShared.map((sheet) => (
+                  <div
+                    key={sheet.id}
+                    onClick={() => onOpenSpreadsheet(sheet.id)}
+                    className={`flex flex-col justify-between rounded-2xl border cursor-pointer transition-all duration-200 p-4 group ${
+                      isDark 
+                        ? 'bg-gradient-to-b from-slate-900 to-slate-900/90 border-sky-900/40 hover:border-sky-500/80 hover:shadow-xl hover:shadow-sky-950/30' 
+                        : 'bg-white border-sky-200 hover:border-sky-500 hover:shadow-md shadow-xs'
+                    }`}
+                  >
+                    <div>
+                      {/* Top Header with RBAC Access Badge */}
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
+                          isDark 
+                            ? 'bg-sky-950/80 text-sky-400 border-sky-800/50' 
+                            : 'bg-sky-50 text-sky-600 border-sky-200'
+                        }`}>
+                          <Share2 className="h-5 w-5" />
+                        </div>
+                        
+                        {/* RBAC Role Tag */}
+                        {renderRoleBadge(sheet.myRole)}
                       </div>
-                      <button
-                        onClick={(e) => handleDelete(e, sheet.id)}
-                        title="Delete spreadsheet"
-                        className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-500 transition"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
+
+                      <h3 className="text-sm font-bold group-hover:text-sky-400 transition line-clamp-1">
+                        {sheet.title}
+                      </h3>
+                      
+                      <p className={`text-[11px] mt-1 flex items-center gap-1.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        <span>Shared by <strong>{sheet.ownerName || sheet.ownerEmail?.split('@')[0] || 'Teammate'}</strong></span>
+                      </p>
                     </div>
 
-                    <h3 className="text-sm font-bold group-hover:text-emerald-500 transition line-clamp-1">
-                      {sheet.title}
-                    </h3>
-                    <p className={`text-[11px] mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
-                      {sheet.sheetCount || 2} sheets • Firestore Cloud
-                    </p>
+                    {/* Bottom Footer Info */}
+                    <div className={`pt-3.5 mt-3.5 border-t flex items-center justify-between text-[11px] ${
+                      isDark ? 'border-slate-800/80 text-slate-400' : 'border-slate-100 text-slate-500'
+                    }`}>
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {new Date(sheet.updatedAt).toLocaleDateString()}
+                      </span>
+                      <span className="flex items-center gap-1 font-semibold text-sky-400 group-hover:translate-x-0.5 transition-transform">
+                        Open Sheet <ArrowRight className="h-3 w-3" />
+                      </span>
+                    </div>
                   </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
 
-                  {/* Bottom Footer Info */}
-                  <div className={`pt-4 mt-4 border-t flex items-center justify-between text-[11px] ${
-                    isDark ? 'border-slate-800/80 text-slate-400' : 'border-slate-100 text-slate-500'
-                  }`}>
-                    <span className="flex items-center gap-1">
-                      <Clock className="h-3 w-3" />
-                      {new Date(sheet.updatedAt).toLocaleDateString()}
-                    </span>
-                    <span className="flex items-center gap-1 font-semibold text-emerald-500 group-hover:translate-x-0.5 transition-transform">
-                      Open <ArrowRight className="h-3 w-3" />
-                    </span>
-                  </div>
-                </div>
-              ))}
+        {/* SECTION 2: OWNED BY YOU */}
+        {(activeTab === 'all' || activeTab === 'owned') && (
+          <section className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <h2 className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${
+                  isDark ? 'text-slate-400' : 'text-slate-500'
+                }`}>
+                  <Layers className="h-4 w-4 text-emerald-500" />
+                  Your Spreadsheets (Owned by You)
+                </h2>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold border ${
+                  isDark ? 'bg-slate-800 text-slate-300 border-slate-700' : 'bg-slate-100 text-slate-700 border-slate-200'
+                }`}>
+                  {spreadsheets.length}
+                </span>
+              </div>
             </div>
-          )}
-        </section>
+
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-16 gap-3 text-slate-400">
+                <div className="h-8 w-8 animate-spin rounded-full border-2 border-emerald-500 border-t-transparent" />
+                <p className="text-xs">Loading your spreadsheets from Firestore...</p>
+              </div>
+            ) : filteredOwned.length === 0 ? (
+              <div className={`flex flex-col items-center justify-center rounded-2xl border border-dashed py-16 px-6 text-center ${
+                isDark ? 'bg-slate-900/40 border-slate-800' : 'bg-white border-slate-300'
+              }`}>
+                <FolderOpen className="h-12 w-12 text-slate-400 mb-3" />
+                <h3 className="text-base font-bold">No personal spreadsheets found</h3>
+                <p className={`text-xs max-w-sm mt-1 ${isDark ? 'text-slate-500' : 'text-slate-400'}`}>
+                  {searchQuery ? `No results match "${searchQuery}".` : 'Create your first sheet using the template gallery above.'}
+                </p>
+                <button
+                  onClick={() => handleCreateFromTemplate(TEMPLATES[0])}
+                  className="mt-5 flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white shadow-md hover:bg-emerald-500 transition"
+                >
+                  <Plus className="h-4 w-4" />
+                  Create Blank Spreadsheet
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+                {filteredOwned.map((sheet) => (
+                  <div
+                    key={sheet.id}
+                    onClick={() => onOpenSpreadsheet(sheet.id)}
+                    className={`flex flex-col justify-between rounded-2xl border cursor-pointer transition-all duration-200 p-4 group ${
+                      isDark 
+                        ? 'bg-slate-900 border-slate-800 hover:border-emerald-500/50 hover:bg-slate-900/90 hover:shadow-xl hover:shadow-emerald-950/20' 
+                        : 'bg-white border-slate-200 hover:border-emerald-500 hover:shadow-md shadow-xs'
+                    }`}
+                  >
+                    {/* Top Preview Card */}
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <div className={`flex h-9 w-9 items-center justify-center rounded-lg border ${
+                          isDark 
+                            ? 'bg-emerald-950/80 text-emerald-400 border-emerald-800/50' 
+                            : 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                        }`}>
+                          <FileSpreadsheet className="h-5 w-5" />
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 px-2 py-0.5 text-[10px] font-bold text-emerald-400">
+                            <ShieldCheck className="h-3 w-3" /> Owner
+                          </span>
+                          <button
+                            onClick={(e) => handleDelete(e, sheet.id)}
+                            title="Delete spreadsheet"
+                            className="rounded-lg p-1.5 text-slate-400 hover:bg-red-500/20 hover:text-red-400 transition"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      <h3 className="text-sm font-bold group-hover:text-emerald-500 transition line-clamp-1">
+                        {sheet.title}
+                      </h3>
+                      <p className={`text-[11px] mt-0.5 ${isDark ? 'text-slate-400' : 'text-slate-500'}`}>
+                        {sheet.sheetCount || 2} sheets • Firestore Cloud
+                      </p>
+                    </div>
+
+                    {/* Bottom Footer Info */}
+                    <div className={`pt-4 mt-4 border-t flex items-center justify-between text-[11px] ${
+                      isDark ? 'border-slate-800/80 text-slate-400' : 'border-slate-100 text-slate-500'
+                    }`}>
+                      <span className="flex items-center gap-1">
+                        <Clock className="h-3 w-3" />
+                        {new Date(sheet.updatedAt).toLocaleDateString()}
+                      </span>
+                      <span className="flex items-center gap-1 font-semibold text-emerald-500 group-hover:translate-x-0.5 transition-transform">
+                        Open <ArrowRight className="h-3 w-3" />
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
       </main>
     </div>
   );

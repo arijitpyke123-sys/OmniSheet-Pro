@@ -6,6 +6,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Registered users for collaborator discovery & profile
+    match /users/{userId} {
+      allow read, write: if true;
+    }
+
     // Spreadsheets collection and all nested subcollections
     match /spreadsheets/{spreadsheetId} {
       allow read, write: if true;

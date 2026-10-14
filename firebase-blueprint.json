@@ -48,9 +48,26 @@
         "timestamp": { "type": "string" }
       },
       "required": ["spreadsheetId", "userId", "action", "timestamp"]
+    },
+    "User": {
+      "title": "User",
+      "description": "User profile for collaborator discovery and invitations",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "User UID" },
+        "email": { "type": "string", "description": "User email address" },
+        "displayName": { "type": "string", "description": "Full name or display name" },
+        "photoURL": { "type": "string", "description": "Avatar URL" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email"]
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "User" },
+      "description": "Registered user profiles for collaborator discovery and sharing"
+    },
     "/spreadsheets/{spreadsheetId}": {
       "schema": { "$ref": "Spreadsheet" },
       "description": "Spreadsheet documents"
