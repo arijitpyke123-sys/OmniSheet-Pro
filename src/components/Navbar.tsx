@@ -15,7 +15,8 @@ import {
   ArrowLeft,
   Sun,
   Moon,
-  Zap
+  Zap,
+  Rocket
 } from 'lucide-react';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWA';
 import { auth } from '../lib/firebase';
@@ -44,6 +45,7 @@ interface NavbarProps {
   onToggleTheme?: () => void;
   onOpenPlanQuota?: () => void;
   quotaStatus?: QuotaStatus;
+  onOpenRenderDeploy?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -67,6 +69,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleTheme,
   onOpenPlanQuota,
   quotaStatus,
+  onOpenRenderDeploy,
 }) => {
   const { isInstallable, isInstalled, install, isIOS } = usePWAInstall();
   const isOnline = useOnlineStatus();
@@ -239,6 +242,22 @@ export const Navbar: React.FC<NavbarProps> = ({
               title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          )}
+
+          {/* Deploy to Render */}
+          {onOpenRenderDeploy && (
+            <button
+              onClick={onOpenRenderDeploy}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-semibold border transition ${
+                isDark 
+                  ? 'bg-sky-950/40 text-sky-400 border-sky-800/60 hover:bg-sky-900/50 hover:border-sky-500' 
+                  : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100'
+              }`}
+              title="Deploy OmniSheet Pro to Render (Static Site or Node Web Service)"
+            >
+              <Rocket className="h-3.5 w-3.5 text-sky-400" />
+              <span className="hidden sm:inline">Deploy</span>
             </button>
           )}
 

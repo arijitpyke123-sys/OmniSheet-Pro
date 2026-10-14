@@ -21,7 +21,7 @@ export const TENANT_PLANS: Record<string, TenantPlan> = {
     priceRupees: 0,
     hourlyQuota: 10,
     burstPerMinute: 25,
-    description: '100 changes / hour • Basic personal formulas & sheets',
+    description: '10 changes / hour • Basic personal formulas & sheets (Quick test mode)',
     badgeColor: '#64748b',
   },
   basic_50: {

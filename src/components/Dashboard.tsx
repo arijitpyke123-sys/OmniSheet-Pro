@@ -17,7 +17,8 @@ import {
   Sun,
   Moon,
   Zap,
-  ShieldCheck
+  ShieldCheck,
+  Rocket
 } from 'lucide-react';
 import { 
   SpreadsheetMeta, 
@@ -37,6 +38,7 @@ interface DashboardProps {
   onToggleTheme?: () => void;
   onOpenPlanQuota?: () => void;
   quotaStatus?: QuotaStatus;
+  onOpenRenderDeploy?: () => void;
 }
 
 interface TemplateItem {
@@ -183,6 +185,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onToggleTheme,
   onOpenPlanQuota,
   quotaStatus,
+  onOpenRenderDeploy,
 }) => {
   const [spreadsheets, setSpreadsheets] = useState<SpreadsheetMeta[]>([]);
   const [loading, setLoading] = useState(true);
@@ -322,6 +325,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
               title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
             >
               {isDark ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            </button>
+          )}
+
+          {/* Deploy to Render */}
+          {onOpenRenderDeploy && (
+            <button
+              onClick={onOpenRenderDeploy}
+              className={`flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-semibold border transition ${
+                isDark 
+                  ? 'bg-sky-950/40 text-sky-400 border-sky-800/60 hover:bg-sky-900/50 hover:border-sky-500 shadow-sm' 
+                  : 'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100 shadow-sm'
+              }`}
+              title="Deploy OmniSheet Pro to Render (Free Static Site or Node Web Service)"
+            >
+              <Rocket className="h-4 w-4 text-sky-400" />
+              <span className="hidden md:inline">Deploy to Render</span>
             </button>
           )}
 

@@ -1,6 +1,6 @@
 {
-  "name": "",
-  "description": "",
+  "name": "OmniSheet Pro",
+  "description": "Collaborative cloud spreadsheet with real-time multi-user editing, multi-tenant Netflix-style rate limiting, formulas, charts, and offline sync.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

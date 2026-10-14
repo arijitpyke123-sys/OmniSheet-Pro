@@ -10,6 +10,7 @@ import { ShareModal } from './components/ShareModal';
 import { PluginModal } from './components/PluginModal';
 import { VersionHistoryModal } from './components/VersionHistoryModal';
 import { PlanQuotaModal } from './components/PlanQuotaModal';
+import { RenderDeployModal } from './components/RenderDeployModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { 
   SheetCells, 
@@ -102,6 +103,7 @@ export default function App() {
   const [isPluginsOpen, setIsPluginsOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isPlanQuotaOpen, setIsPlanQuotaOpen] = useState(false);
+  const [isRenderDeployOpen, setIsRenderDeployOpen] = useState(false);
 
   // Tenant Plan & Rate Limiting state (Netflix-style rolling quota)
   const [tenantPlanId, setTenantPlanId] = useState<string>(() => {
@@ -606,6 +608,7 @@ export default function App() {
           onToggleTheme={handleToggleTheme}
           onOpenPlanQuota={() => setIsPlanQuotaOpen(true)}
           quotaStatus={quotaStatus}
+          onOpenRenderDeploy={() => setIsRenderDeployOpen(true)}
         />
 
         {/* Plan & Quota Modal accessible from Dashboard */}
@@ -617,6 +620,13 @@ export default function App() {
           quotaStatus={quotaStatus}
           onResetQuotaDemo={handleResetQuotaDemo}
           onSimulateLimitDemo={handleSimulateLimitDemo}
+          theme={theme}
+        />
+
+        {/* Render Deployment Modal */}
+        <RenderDeployModal
+          isOpen={isRenderDeployOpen}
+          onClose={() => setIsRenderDeployOpen(false)}
           theme={theme}
         />
 
@@ -665,6 +675,7 @@ export default function App() {
         onToggleTheme={handleToggleTheme}
         onOpenPlanQuota={() => setIsPlanQuotaOpen(true)}
         quotaStatus={quotaStatus}
+        onOpenRenderDeploy={() => setIsRenderDeployOpen(true)}
       />
 
       <Toolbar
@@ -780,6 +791,12 @@ export default function App() {
         quotaStatus={quotaStatus}
         onResetQuotaDemo={handleResetQuotaDemo}
         onSimulateLimitDemo={handleSimulateLimitDemo}
+        theme={theme}
+      />
+
+      <RenderDeployModal
+        isOpen={isRenderDeployOpen}
+        onClose={() => setIsRenderDeployOpen(false)}
         theme={theme}
       />
 
