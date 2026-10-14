@@ -32,7 +32,7 @@ import {
   X 
 } from 'lucide-react';
 import { auth } from './lib/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { 
   saveSpreadsheetToFirestore, 
   loadSpreadsheetFromFirestore, 
@@ -46,7 +46,14 @@ import {
 import Papa from 'papaparse';
 
 export default function App() {
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<any>(() => {
+    try {
+      const saved = localStorage.getItem('omnisheet_active_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [authChecking, setAuthChecking] = useState(true);
 
   // Theme state: dark / light
@@ -195,6 +202,14 @@ export default function App() {
         unsubscribe = onAuthStateChanged(auth, (currentUser) => {
           if (currentUser) {
             setUser(currentUser);
+            try {
+              localStorage.setItem('omnisheet_active_user', JSON.stringify({
+                uid: currentUser.uid,
+                email: currentUser.email,
+                displayName: currentUser.displayName,
+                photoURL: currentUser.photoURL,
+              }));
+            } catch {}
             if (currentUser.email) {
               setCollaborators(prev => {
                 if (!prev.some(c => c.email === currentUser.email)) {
@@ -581,13 +596,44 @@ export default function App() {
     );
   }
 
+  const handleLoginSuccess = (authenticatedUser: any) => {
+    setUser(authenticatedUser);
+    try {
+      localStorage.setItem('omnisheet_active_user', JSON.stringify({
+        uid: authenticatedUser.uid,
+        email: authenticatedUser.email,
+        displayName: authenticatedUser.displayName,
+        photoURL: authenticatedUser.photoURL,
+      }));
+    } catch {}
+    if (authenticatedUser.email) {
+      setCollaborators(prev => {
+        if (!prev.some(c => c.email === authenticatedUser.email)) {
+          return [...prev, { email: authenticatedUser.email!, role: 'owner' }];
+        }
+        return prev;
+      });
+    }
+  };
+
+  const handleSignOut = async () => {
+    try {
+      localStorage.removeItem('omnisheet_active_user');
+      if (auth) {
+        await signOut(auth);
+      }
+    } catch (err) {
+      console.warn('Sign out warning:', err);
+    }
+    setUser(null);
+    setActiveSpreadsheetId(null);
+  };
+
   // 1. AUTHENTICATION PAGE BEFORE APPLICATION OPENS
   if (!user) {
     return (
       <AuthPage 
-        onLoginSuccess={(authenticatedUser) => {
-          setUser(authenticatedUser);
-        }} 
+        onLoginSuccess={handleLoginSuccess} 
       />
     );
   }
@@ -601,9 +647,7 @@ export default function App() {
           onOpenSpreadsheet={(sheetId) => {
             setActiveSpreadsheetId(sheetId);
           }}
-          onSignOut={() => {
-            setUser(null);
-          }}
+          onSignOut={handleSignOut}
           theme={theme}
           onToggleTheme={handleToggleTheme}
           onOpenPlanQuota={() => setIsPlanQuotaOpen(true)}

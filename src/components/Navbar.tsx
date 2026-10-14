@@ -79,6 +79,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('omnisheet_active_user');
       if (auth) {
         await signOut(auth);
       }
