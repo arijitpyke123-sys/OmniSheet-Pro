@@ -8,6 +8,11 @@ export interface CellData {
   bgColor?: string;
   align?: 'left' | 'center' | 'right';
   border?: boolean;
+  image?: {
+    url: string;
+    alt?: string;
+    fit?: 'contain' | 'cover';
+  };
 }
 
 export type SheetCells = Record<string, CellData>;
@@ -169,6 +174,13 @@ export function evaluateFormula(formula: string, cells: SheetCells, visited = ne
       return condResult ? resolveValue(ifMatch[2].trim(), cells, visited) : resolveValue(ifMatch[3].trim(), cells, visited);
     }
 
+    // Handle IMAGE(url, [alt])
+    const imageMatch = cleanFormula.match(/^IMAGE\((.+)\)$/i);
+    if (imageMatch) {
+      const args = resolveArguments(imageMatch[1], cells, visited);
+      return String(args[0] || '').trim();
+    }
+
     // Handle standard functions: SUM, AVERAGE, COUNT, MAX, MIN, PRODUCT, MEDIAN, UPPER, LOWER, LEN, TRIM, ROUND, ABS
     const funcMatch = cleanFormula.match(/^([A-Z]+)\((.+)\)$/);
     if (funcMatch) {
@@ -303,4 +315,184 @@ function evaluateCondition(condStr: string, cells: SheetCells, visited: Set<stri
     }
   }
   return Boolean(resolveValue(condStr, cells, visited));
+}
+
+// Shift formula references when inserting or deleting rows/columns
+export function shiftFormulaReferences(
+  formula: string,
+  type: 'row_insert' | 'row_delete' | 'col_insert' | 'col_delete',
+  atIndex: number // 0-based index
+): string {
+  if (!formula || !formula.startsWith('=')) return formula;
+
+  return formula.replace(/\b([A-Z]+)([0-9]+)\b/g, (match, colStr, rowStr) => {
+    const col = colLetterToIndex(colStr);
+    const row = parseInt(rowStr, 10) - 1; // 0-based
+
+    if (type === 'row_insert') {
+      if (row >= atIndex) {
+        return `${colStr}${row + 2}`;
+      }
+    } else if (type === 'row_delete') {
+      if (row === atIndex) {
+        return '#REF!';
+      } else if (row > atIndex) {
+        return `${colStr}${row}`;
+      }
+    } else if (type === 'col_insert') {
+      if (col >= atIndex) {
+        return `${colIndexToLetter(col + 1)}${rowStr}`;
+      }
+    } else if (type === 'col_delete') {
+      if (col === atIndex) {
+        return '#REF!';
+      } else if (col > atIndex) {
+        return `${colIndexToLetter(col - 1)}${rowStr}`;
+      }
+    }
+    return match;
+  });
+}
+
+// Shift cell map when inserting a row at 0-based index
+export function shiftCellsOnRowInsert(cells: SheetCells, insertAtRow: number): SheetCells {
+  const result: SheetCells = {};
+  for (const [key, cell] of Object.entries(cells)) {
+    const coords = parseCellCoord(key);
+    if (!coords) {
+      result[key] = cell;
+      continue;
+    }
+    const updatedFormula = cell.formula 
+      ? shiftFormulaReferences(cell.formula, 'row_insert', insertAtRow)
+      : undefined;
+    const updatedCell = updatedFormula !== undefined ? { ...cell, formula: updatedFormula } : { ...cell };
+
+    if (coords.row >= insertAtRow) {
+      const newKey = cellCoordToString(coords.col, coords.row + 1);
+      result[newKey] = updatedCell;
+    } else {
+      result[key] = updatedCell;
+    }
+  }
+  return result;
+}
+
+// Shift cell map when deleting a row at 0-based index
+export function shiftCellsOnRowDelete(cells: SheetCells, deleteAtRow: number): SheetCells {
+  const result: SheetCells = {};
+  for (const [key, cell] of Object.entries(cells)) {
+    const coords = parseCellCoord(key);
+    if (!coords) {
+      result[key] = cell;
+      continue;
+    }
+    if (coords.row === deleteAtRow) {
+      continue; // Delete cell
+    }
+    const updatedFormula = cell.formula 
+      ? shiftFormulaReferences(cell.formula, 'row_delete', deleteAtRow)
+      : undefined;
+    const updatedCell = updatedFormula !== undefined ? { ...cell, formula: updatedFormula } : { ...cell };
+
+    if (coords.row > deleteAtRow) {
+      const newKey = cellCoordToString(coords.col, coords.row - 1);
+      result[newKey] = updatedCell;
+    } else {
+      result[key] = updatedCell;
+    }
+  }
+  return result;
+}
+
+// Shift cell map when inserting a column at 0-based index
+export function shiftCellsOnColInsert(cells: SheetCells, insertAtCol: number): SheetCells {
+  const result: SheetCells = {};
+  for (const [key, cell] of Object.entries(cells)) {
+    const coords = parseCellCoord(key);
+    if (!coords) {
+      result[key] = cell;
+      continue;
+    }
+    const updatedFormula = cell.formula 
+      ? shiftFormulaReferences(cell.formula, 'col_insert', insertAtCol)
+      : undefined;
+    const updatedCell = updatedFormula !== undefined ? { ...cell, formula: updatedFormula } : { ...cell };
+
+    if (coords.col >= insertAtCol) {
+      const newKey = cellCoordToString(coords.col + 1, coords.row);
+      result[newKey] = updatedCell;
+    } else {
+      result[key] = updatedCell;
+    }
+  }
+  return result;
+}
+
+// Shift cell map when deleting a column at 0-based index
+export function shiftCellsOnColDelete(cells: SheetCells, deleteAtCol: number): SheetCells {
+  const result: SheetCells = {};
+  for (const [key, cell] of Object.entries(cells)) {
+    const coords = parseCellCoord(key);
+    if (!coords) {
+      result[key] = cell;
+      continue;
+    }
+    if (coords.col === deleteAtCol) {
+      continue; // Delete cell
+    }
+    const updatedFormula = cell.formula 
+      ? shiftFormulaReferences(cell.formula, 'col_delete', deleteAtCol)
+      : undefined;
+    const updatedCell = updatedFormula !== undefined ? { ...cell, formula: updatedFormula } : { ...cell };
+
+    if (coords.col > deleteAtCol) {
+      const newKey = cellCoordToString(coords.col - 1, coords.row);
+      result[newKey] = updatedCell;
+    } else {
+      result[key] = updatedCell;
+    }
+  }
+  return result;
+}
+
+// Extract selected cell range into 2D matrix, TSV string, and metadata
+export function extractRangeToMatrix(
+  cells: SheetCells,
+  startCoordStr: string,
+  endCoordStr: string
+): { matrix: string[][]; tsv: string; minRow: number; maxRow: number; minCol: number; maxCol: number; count: number } {
+  const start = parseCellCoord(startCoordStr) || { col: 0, row: 0 };
+  const end = parseCellCoord(endCoordStr) || start;
+
+  const minRow = Math.min(start.row, end.row);
+  const maxRow = Math.max(start.row, end.row);
+  const minCol = Math.min(start.col, end.col);
+  const maxCol = Math.max(start.col, end.col);
+
+  const matrix: string[][] = [];
+  const lines: string[] = [];
+
+  for (let r = minRow; r <= maxRow; r++) {
+    const rowVals: string[] = [];
+    for (let c = minCol; c <= maxCol; c++) {
+      const key = cellCoordToString(c, r);
+      const cell = cells[key];
+      const val = cell?.formula || cell?.value || '';
+      rowVals.push(String(val));
+    }
+    matrix.push(rowVals);
+    lines.push(rowVals.join('\t'));
+  }
+
+  const count = (maxRow - minRow + 1) * (maxCol - minCol + 1);
+  return {
+    matrix,
+    tsv: lines.join('\n'),
+    minRow,
+    maxRow,
+    minCol,
+    maxCol,
+    count,
+  };
 }

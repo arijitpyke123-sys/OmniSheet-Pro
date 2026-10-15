@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   Bold, 
   Italic, 
@@ -11,7 +11,19 @@ import {
   PlusCircle,
   Sigma,
   Eraser,
-  Layers
+  Layers,
+  Image as ImageIcon,
+  Sparkles,
+  Copy,
+  Clipboard,
+  ChevronDown,
+  Rows,
+  Columns,
+  Trash2,
+  ArrowUp,
+  ArrowDown,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
 
 interface ToolbarProps {
@@ -21,6 +33,16 @@ interface ToolbarProps {
   onAddCol: () => void;
   onClearSelected?: () => void;
   onAutoSumSelected?: () => void;
+  onOpenImageModal?: () => void;
+  onOpenAIAnalysis?: () => void;
+  onCopySelected?: () => void;
+  onPasteSelected?: () => void;
+  onInsertRowAbove?: () => void;
+  onInsertRowBelow?: () => void;
+  onInsertColLeft?: () => void;
+  onInsertColRight?: () => void;
+  onDeleteRow?: () => void;
+  onDeleteCol?: () => void;
   selectedCellsCount?: number;
   selectionLabel?: string;
   theme?: 'dark' | 'light';
@@ -33,11 +55,39 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onAddCol,
   onClearSelected,
   onAutoSumSelected,
+  onOpenImageModal,
+  onOpenAIAnalysis,
+  onCopySelected,
+  onPasteSelected,
+  onInsertRowAbove,
+  onInsertRowBelow,
+  onInsertColLeft,
+  onInsertColRight,
+  onDeleteRow,
+  onDeleteCol,
   selectedCellsCount = 1,
   selectionLabel = 'A1',
   theme = 'dark',
 }) => {
   const isDark = theme === 'dark';
+  const [insertDropdownOpen, setInsertDropdownOpen] = useState(false);
+  const [deleteDropdownOpen, setDeleteDropdownOpen] = useState(false);
+  const insertMenuRef = useRef<HTMLDivElement>(null);
+  const deleteMenuRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdowns when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (insertMenuRef.current && !insertMenuRef.current.contains(e.target as Node)) {
+        setInsertDropdownOpen(false);
+      }
+      if (deleteMenuRef.current && !deleteMenuRef.current.contains(e.target as Node)) {
+        setDeleteDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const containerClasses = isDark
     ? 'border-slate-800 bg-slate-900 text-slate-300'
@@ -51,6 +101,14 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const subBtnClasses = isDark
     ? 'rounded bg-slate-800/80 px-2 py-1 text-xs font-medium border border-slate-700 hover:bg-slate-700 hover:text-white transition'
     : 'rounded bg-slate-100 px-2 py-1 text-xs font-medium border border-slate-200 hover:bg-slate-200 hover:text-slate-900 transition';
+
+  const dropdownMenuClasses = isDark
+    ? 'bg-slate-900 border-slate-800 text-slate-200 shadow-2xl'
+    : 'bg-white border-slate-200 text-slate-800 shadow-xl';
+
+  const menuItemClasses = isDark
+    ? 'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left hover:bg-slate-800 hover:text-emerald-400 transition'
+    : 'flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left hover:bg-slate-100 hover:text-emerald-600 transition';
 
   return (
     <div className={`flex flex-wrap items-center justify-between gap-2 border-b px-4 py-1.5 select-none ${containerClasses}`}>
@@ -69,6 +127,35 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             }`}>
               {selectedCellsCount} cells
             </span>
+          )}
+        </div>
+
+        {/* Copy & Paste Tools */}
+        <div className={`flex items-center gap-0.5 border-r pr-1.5 ${dividerClasses}`}>
+          {onCopySelected && (
+            <button
+              onClick={onCopySelected}
+              title="Copy Selected Cells (Ctrl+C)"
+              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded ${
+                isDark ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'
+              }`}
+            >
+              <Copy className="h-3.5 w-3.5 text-emerald-400" />
+              <span>Copy</span>
+            </button>
+          )}
+
+          {onPasteSelected && (
+            <button
+              onClick={onPasteSelected}
+              title="Paste (Ctrl+V)"
+              className={`flex items-center gap-1 px-2 py-1 text-xs font-medium rounded ${
+                isDark ? 'hover:bg-slate-800 text-slate-200' : 'hover:bg-slate-100 text-slate-700'
+              }`}
+            >
+              <Clipboard className="h-3.5 w-3.5 text-sky-400" />
+              <span>Paste</span>
+            </button>
           )}
         </div>
 
@@ -211,24 +298,180 @@ export const Toolbar: React.FC<ToolbarProps> = ({
             IF
           </button>
         </div>
+
+        {/* Insert Image & AI Analysis Buttons */}
+        <div className={`flex items-center gap-1.5 border-l pl-2 ${dividerClasses}`}>
+          {onOpenImageModal && (
+            <button
+              onClick={onOpenImageModal}
+              className={`flex items-center gap-1.5 ${subBtnClasses} text-emerald-400 hover:text-emerald-300 font-semibold`}
+              title="Insert Image in Selected Cell"
+            >
+              <ImageIcon className="h-3.5 w-3.5" />
+              <span>Image</span>
+            </button>
+          )}
+
+          {onOpenAIAnalysis && (
+            <button
+              onClick={onOpenAIAnalysis}
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold text-white bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 shadow-sm transition"
+              title="Open Gemini AI Data Analysis & Insights"
+            >
+              <Sparkles className="h-3.5 w-3.5 animate-pulse text-amber-300" />
+              <span>AI Analysis</span>
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Grid structure additions */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={onAddRow}
-          className={`flex items-center gap-1 ${subBtnClasses}`}
-        >
-          <PlusCircle className="h-3.5 w-3.5 text-emerald-500" />
-          <span className="text-xs">Row</span>
-        </button>
-        <button
-          onClick={onAddCol}
-          className={`flex items-center gap-1 ${subBtnClasses}`}
-        >
-          <PlusCircle className="h-3.5 w-3.5 text-sky-500" />
-          <span className="text-xs">Column</span>
-        </button>
+      {/* Grid Structure & Insert/Delete in between */}
+      <div className="flex items-center gap-1.5">
+        {/* Insert In-Between Dropdown */}
+        <div className="relative" ref={insertMenuRef}>
+          <button
+            onClick={() => setInsertDropdownOpen(prev => !prev)}
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg border transition ${
+              isDark 
+                ? 'bg-slate-800/90 border-slate-700 text-emerald-400 hover:bg-slate-700 hover:text-white' 
+                : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+            }`}
+            title="Insert row or column in between"
+          >
+            <PlusCircle className="h-3.5 w-3.5" />
+            <span>Insert</span>
+            <ChevronDown className="h-3 w-3 opacity-70" />
+          </button>
+
+          {insertDropdownOpen && (
+            <div className={`absolute right-0 top-full mt-1 w-48 rounded-xl border py-1.5 z-50 ${dropdownMenuClasses}`}>
+              <div className="px-3 py-1 text-[10px] uppercase font-bold tracking-wider text-slate-400">
+                Insert in between
+              </div>
+
+              {onInsertRowAbove && (
+                <button
+                  onClick={() => {
+                    onInsertRowAbove();
+                    setInsertDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <ArrowUp className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Row Above ({selectionLabel})</span>
+                </button>
+              )}
+
+              {onInsertRowBelow && (
+                <button
+                  onClick={() => {
+                    onInsertRowBelow();
+                    setInsertDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <ArrowDown className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Row Below ({selectionLabel})</span>
+                </button>
+              )}
+
+              <div className={`my-1 border-t ${isDark ? 'border-slate-800' : 'border-slate-100'}`} />
+
+              {onInsertColLeft && (
+                <button
+                  onClick={() => {
+                    onInsertColLeft();
+                    setInsertDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <ArrowLeft className="h-3.5 w-3.5 text-sky-400" />
+                  <span>Column Left ({selectionLabel})</span>
+                </button>
+              )}
+
+              {onInsertColRight && (
+                <button
+                  onClick={() => {
+                    onInsertColRight();
+                    setInsertDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <ArrowRight className="h-3.5 w-3.5 text-sky-400" />
+                  <span>Column Right ({selectionLabel})</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Delete Row/Col Dropdown */}
+        <div className="relative" ref={deleteMenuRef}>
+          <button
+            onClick={() => setDeleteDropdownOpen(prev => !prev)}
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg border transition ${
+              isDark 
+                ? 'bg-slate-800/90 border-slate-700 text-red-400 hover:bg-red-950/40 hover:border-red-800' 
+                : 'bg-red-50 border-red-200 text-red-600 hover:bg-red-100'
+            }`}
+            title="Delete current row or column"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            <span>Delete</span>
+            <ChevronDown className="h-3 w-3 opacity-70" />
+          </button>
+
+          {deleteDropdownOpen && (
+            <div className={`absolute right-0 top-full mt-1 w-44 rounded-xl border py-1.5 z-50 ${dropdownMenuClasses}`}>
+              {onDeleteRow && (
+                <button
+                  onClick={() => {
+                    onDeleteRow();
+                    setDeleteDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <Rows className="h-3.5 w-3.5 text-red-400" />
+                  <span>Delete Current Row</span>
+                </button>
+              )}
+
+              {onDeleteCol && (
+                <button
+                  onClick={() => {
+                    onDeleteCol();
+                    setDeleteDropdownOpen(false);
+                  }}
+                  className={menuItemClasses}
+                >
+                  <Columns className="h-3.5 w-3.5 text-red-400" />
+                  <span>Delete Current Column</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Quick Add at End */}
+        <div className="flex items-center gap-1 pl-1 border-l border-slate-800/50">
+          <button
+            onClick={onAddRow}
+            className={`flex items-center gap-1 ${subBtnClasses}`}
+            title="Add 1,000 rows at end"
+          >
+            <PlusCircle className="h-3 w-3 text-emerald-500" />
+            <span className="text-xs">+1k Rows</span>
+          </button>
+          <button
+            onClick={onAddCol}
+            className={`flex items-center gap-1 ${subBtnClasses}`}
+            title="Add 5 columns at end"
+          >
+            <PlusCircle className="h-3 w-3 text-sky-500" />
+            <span className="text-xs">+5 Cols</span>
+          </button>
+        </div>
       </div>
     </div>
   );

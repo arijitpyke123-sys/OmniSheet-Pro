@@ -16,7 +16,9 @@ import {
   Sun,
   Moon,
   Zap,
-  Rocket
+  Rocket,
+  Sparkles,
+  Activity
 } from 'lucide-react';
 import { usePWAInstall, useOnlineStatus } from '../hooks/usePWA';
 import { auth } from '../lib/firebase';
@@ -30,6 +32,7 @@ interface NavbarProps {
   onBackToDashboard: () => void;
   onOpenShare: () => void;
   onOpenCharts: () => void;
+  onOpenAIAnalysis?: () => void;
   onOpenPlugins: () => void;
   onOpenHistory: () => void;
   onExportCSV: () => void;
@@ -46,6 +49,7 @@ interface NavbarProps {
   onOpenPlanQuota?: () => void;
   quotaStatus?: QuotaStatus;
   onOpenRenderDeploy?: () => void;
+  onOpenSimulation?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -54,6 +58,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onBackToDashboard,
   onOpenShare,
   onOpenCharts,
+  onOpenAIAnalysis,
   onOpenPlugins,
   onOpenHistory,
   onExportCSV,
@@ -70,6 +75,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenPlanQuota,
   quotaStatus,
   onOpenRenderDeploy,
+  onOpenSimulation,
 }) => {
   const { isInstallable, isInstalled, install, isIOS } = usePWAInstall();
   const isOnline = useOnlineStatus();
@@ -289,6 +295,32 @@ export const Navbar: React.FC<NavbarProps> = ({
             <BarChart3 className="h-4 w-4 text-emerald-500" />
             Charts
           </button>
+
+          {onOpenAIAnalysis && (
+            <button
+              onClick={onOpenAIAnalysis}
+              className="flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-sm hover:from-purple-500 hover:to-indigo-500 transition"
+              title="Open Gemini AI Data Analysis & Insights"
+            >
+              <Sparkles className="h-4 w-4 text-amber-300 animate-pulse" />
+              <span>AI Analysis</span>
+            </button>
+          )}
+
+          {onOpenSimulation && (
+            <button
+              onClick={onOpenSimulation}
+              className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-bold border transition ${
+                isDark 
+                  ? 'bg-indigo-950/40 text-indigo-400 border-indigo-800/60 hover:bg-indigo-900/50 hover:border-indigo-500' 
+                  : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+              }`}
+              title="Open Collaboration & Chaos Simulation Studio (Test Concurrent Writes, Convergence & Offline Replay)"
+            >
+              <Activity className="h-3.5 w-3.5 text-indigo-400 animate-pulse" />
+              <span>Simulator</span>
+            </button>
+          )}
 
           <button
             onClick={onOpenPlugins}

@@ -11,13 +11,28 @@ import { PluginModal } from './components/PluginModal';
 import { VersionHistoryModal } from './components/VersionHistoryModal';
 import { PlanQuotaModal } from './components/PlanQuotaModal';
 import { RenderDeployModal } from './components/RenderDeployModal';
+import { ImageInsertModal } from './components/ImageInsertModal';
+import { AIDataAnalysisModal } from './components/AIDataAnalysisModal';
+import { SimulationModal } from './components/SimulationModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { 
   SheetCells, 
   getCellsInRange, 
   parseCellCoord, 
-  cellCoordToString 
+  cellCoordToString,
+  colIndexToLetter,
+  shiftCellsOnRowInsert,
+  shiftCellsOnRowDelete,
+  shiftCellsOnColInsert,
+  shiftCellsOnColDelete,
+  extractRangeToMatrix
 } from './utils/formulaEngine';
+import { 
+  globalRangeCache, 
+  fetchSpreadsheetRange, 
+  executeBatchOperation, 
+  ViewportRange 
+} from './utils/rangeManager';
 import { 
   tenantRateLimiter, 
   TENANT_PLANS, 
@@ -99,8 +114,11 @@ export default function App() {
   const [selectedCell, setSelectedCell] = useState('A1');
   const [selectionRange, setSelectionRange] = useState<{ start: string; end: string } | null>(null);
   const [formulaValue, setFormulaValue] = useState('');
-  const [rowCount, setRowCount] = useState(50);
-  const [colCount, setColCount] = useState(20);
+  const [rowCount, setRowCount] = useState(100000); // 100,000 virtual rows scalable grid
+  const [colCount, setColCount] = useState(50);     // 50 columns (A through AX)
+  const [isRangeLoading, setIsRangeLoading] = useState(false);
+  const [documentRevision, setDocumentRevision] = useState(1);
+  const [copiedRange, setCopiedRange] = useState<{ start: string; end: string } | null>(null);
 
   // Firestore Sync & Real-time Concurrent Collaboration State
   const [isSaving, setIsSaving] = useState(false);
@@ -116,6 +134,10 @@ export default function App() {
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [isPlanQuotaOpen, setIsPlanQuotaOpen] = useState(false);
   const [isRenderDeployOpen, setIsRenderDeployOpen] = useState(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [imageTargetCell, setImageTargetCell] = useState<string>('A1');
+  const [isAIAnalysisOpen, setIsAIAnalysisOpen] = useState(false);
+  const [isSimulationOpen, setIsSimulationOpen] = useState(false);
 
   // Tenant Plan & Rate Limiting state (Netflix-style rolling quota)
   const [tenantPlanId, setTenantPlanId] = useState<string>(() => {
@@ -508,6 +530,386 @@ export default function App() {
     setAuditLogs(prev => [logEntry, ...prev]);
     if (activeSpreadsheetId) {
       recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+      executeBatchOperation({
+        spreadsheetId: activeSpreadsheetId,
+        sheetName: activeSheet,
+        operations: [{
+          type: selectionRange ? 'clear_range' : 'set_cells',
+          range: selectionRange ? { start: selectionRange.start, end: selectionRange.end } : undefined,
+          cells: !selectionRange ? targets.map(key => ({ key, cell: {} })) : undefined,
+        }],
+      }).then(res => {
+        if (res && res.newRevision) {
+          setDocumentRevision(res.newRevision);
+          globalRangeCache.updateLocalEdits(activeSheet, {}, targets);
+        }
+      }).catch(err => console.warn('Batch clear server note:', err));
+    }
+  };
+
+  const handleBatchPaste = async (targetTopLeft: string, matrix: string[][]) => {
+    if (activeRole === 'viewer') return;
+    const currentTenant = user?.uid || 'guest';
+    const totalCells = matrix.length * (matrix[0]?.length || 1);
+    const quotaCheck = tenantRateLimiter.consumeQuota(currentTenant, tenantPlanId, totalCells);
+    setQuotaStatus(quotaCheck);
+
+    if (!quotaCheck.allowed) {
+      setQuotaAlertMessage(quotaCheck.error || 'Batch paste exceeds quota limit');
+      return;
+    }
+
+    const startCoord = parseCellCoord(targetTopLeft);
+    if (!startCoord) return;
+
+    const optimisticCells: SheetCells = {};
+    for (let r = 0; r < matrix.length; r++) {
+      for (let c = 0; c < matrix[r].length; c++) {
+        const val = matrix[r][c];
+        const key = cellCoordToString(startCoord.col + c, startCoord.row + r);
+        if (val.startsWith('=')) {
+          optimisticCells[key] = { formula: val, value: '' };
+        } else {
+          optimisticCells[key] = { value: val };
+        }
+      }
+    }
+
+    setAllSheetCells(prev => {
+      const updated = {
+        ...prev,
+        [activeSheet]: {
+          ...(prev[activeSheet] || {}),
+          ...optimisticCells,
+        },
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    if (activeSpreadsheetId) {
+      try {
+        const res = await executeBatchOperation({
+          spreadsheetId: activeSpreadsheetId,
+          sheetName: activeSheet,
+          operations: [{
+            type: 'paste_cells',
+            targetTopLeft,
+            matrix,
+          }],
+        });
+        if (res && res.newRevision) {
+          setDocumentRevision(res.newRevision);
+          globalRangeCache.updateLocalEdits(activeSheet, optimisticCells);
+        }
+      } catch (e) {
+        console.warn('Batch paste server note:', e);
+      }
+    }
+
+    const logEntry = {
+      action: `Pasted block of ${totalCells} cells starting at ${targetTopLeft}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+  };
+
+  const prefetchTimeoutRef = useRef<any>(null);
+  const currentAbortCtrlRef = useRef<AbortController | null>(null);
+
+  const handleViewportChange = (viewport: ViewportRange) => {
+    if (!activeSpreadsheetId) return;
+
+    if (prefetchTimeoutRef.current) {
+      clearTimeout(prefetchTimeoutRef.current);
+    }
+
+    prefetchTimeoutRef.current = setTimeout(async () => {
+      const prefetchStartRow = Math.max(0, viewport.startRow - 50);
+      const prefetchEndRow = Math.min(rowCount - 1, viewport.endRow + 100);
+      const prefetchStartCol = Math.max(0, viewport.startCol - 5);
+      const prefetchEndCol = Math.min(colCount - 1, viewport.endCol + 10);
+
+      const { missingChunks } = globalRangeCache.getCachedCellsForRange(
+        activeSheet,
+        prefetchStartRow,
+        prefetchEndRow,
+        prefetchStartCol,
+        prefetchEndCol
+      );
+
+      if (missingChunks.length === 0) return;
+
+      if (currentAbortCtrlRef.current) {
+        currentAbortCtrlRef.current.abort();
+      }
+      const abortCtrl = new AbortController();
+      currentAbortCtrlRef.current = abortCtrl;
+
+      setIsRangeLoading(true);
+      try {
+        const response = await fetchSpreadsheetRange(
+          activeSpreadsheetId,
+          activeSheet,
+          {
+            startRow: prefetchStartRow,
+            endRow: prefetchEndRow,
+            startCol: prefetchStartCol,
+            endCol: prefetchEndCol,
+          },
+          abortCtrl.signal
+        );
+
+        if (response && response.cells) {
+          for (const chunk of missingChunks) {
+            globalRangeCache.storeChunk(activeSheet, chunk.chunkRow, chunk.chunkCol, response.cells, response.revision);
+          }
+          setDocumentRevision(response.revision);
+
+          setAllSheetCells(prev => {
+            const current = prev[activeSheet] || {};
+            const merged = { ...response.cells, ...current };
+            return {
+              ...prev,
+              [activeSheet]: merged,
+            };
+          });
+        }
+      } catch (err: any) {
+        if (err.name !== 'AbortError') {
+          console.warn('Range prefetch info:', err?.message);
+        }
+      } finally {
+        setIsRangeLoading(false);
+      }
+    }, 120);
+  };
+
+  const handleCopySelected = () => {
+    const start = selectionRange?.start || selectedCell;
+    const end = selectionRange?.end || selectedCell;
+    const current = allSheetCells[activeSheet] || {};
+    const { tsv } = extractRangeToMatrix(current, start, end);
+
+    if (navigator?.clipboard?.writeText) {
+      navigator.clipboard.writeText(tsv).catch(err => console.warn('Clipboard write error:', err));
+    }
+    setCopiedRange({ start, end });
+  };
+
+  const handlePasteSelected = async () => {
+    if (activeRole === 'viewer') return;
+    try {
+      if (navigator?.clipboard?.readText) {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          const rows = text.split(/\r?\n/).filter(r => r.length > 0);
+          if (rows.length > 0) {
+            const matrix = rows.map(r => r.split('\t'));
+            handleBatchPaste(selectedCell, matrix);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Clipboard read note:', err);
+    }
+  };
+
+  const handleInsertRowAbove = (customRowIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetRow = customRowIndex !== undefined 
+      ? customRowIndex 
+      : (parseCellCoord(selectedCell)?.row ?? 0);
+    const insertAt = targetRow;
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnRowInsert(current, insertAt);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setRowCount(prev => prev + 1);
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Inserted row above row ${targetRow + 1} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+    }
+  };
+
+  const handleInsertRowBelow = (customRowIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetRow = customRowIndex !== undefined 
+      ? customRowIndex 
+      : (parseCellCoord(selectedCell)?.row ?? 0);
+    const insertAt = targetRow + 1;
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnRowInsert(current, insertAt);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setRowCount(prev => prev + 1);
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Inserted row below row ${targetRow + 1} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+    }
+  };
+
+  const handleInsertColLeft = (customColIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetCol = customColIndex !== undefined 
+      ? customColIndex 
+      : (parseCellCoord(selectedCell)?.col ?? 0);
+    const insertAt = targetCol;
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnColInsert(current, insertAt);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setColCount(prev => prev + 1);
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Inserted column to the left of column ${colIndexToLetter(targetCol)} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+    }
+  };
+
+  const handleInsertColRight = (customColIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetCol = customColIndex !== undefined 
+      ? customColIndex 
+      : (parseCellCoord(selectedCell)?.col ?? 0);
+    const insertAt = targetCol + 1;
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnColInsert(current, insertAt);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setColCount(prev => prev + 1);
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Inserted column to the right of column ${colIndexToLetter(targetCol)} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+    }
+  };
+
+  const handleDeleteRow = (customRowIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetRow = customRowIndex !== undefined 
+      ? customRowIndex 
+      : (parseCellCoord(selectedCell)?.row ?? 0);
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnRowDelete(current, targetRow);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setRowCount(prev => Math.max(1, prev - 1));
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Deleted row ${targetRow + 1} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
+    }
+  };
+
+  const handleDeleteCol = (customColIndex?: number) => {
+    if (activeRole === 'viewer') return;
+    const targetCol = customColIndex !== undefined 
+      ? customColIndex 
+      : (parseCellCoord(selectedCell)?.col ?? 0);
+
+    setAllSheetCells(prev => {
+      const current = prev[activeSheet] || {};
+      const shifted = shiftCellsOnColDelete(current, targetCol);
+      const updated = {
+        ...prev,
+        [activeSheet]: shifted,
+      };
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updated, sheets);
+      return updated;
+    });
+
+    setColCount(prev => Math.max(1, prev - 1));
+    globalRangeCache.invalidate(activeSheet);
+
+    const logEntry = {
+      action: `Deleted column ${colIndexToLetter(targetCol)} in ${activeSheet}`,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', logEntry.action);
     }
   };
 
@@ -546,6 +948,71 @@ export default function App() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectionRange, selectedCell, allSheetCells, activeSheet, user, activeSpreadsheetId]);
+
+  const handleSaveImage = (
+    cellKey: string,
+    imageData: { url: string; alt?: string; fit?: 'contain' | 'cover' } | null,
+    asFormula?: boolean
+  ) => {
+    if (activeRole === 'viewer') return;
+
+    // Check quota
+    const currentTenant = user?.uid || 'guest';
+    const quotaCheck = tenantRateLimiter.consumeQuota(currentTenant, tenantPlanId);
+    setQuotaStatus(quotaCheck);
+
+    if (!quotaCheck.allowed) {
+      setQuotaAlertMessage(quotaCheck.error || 'Rate limit exceeded');
+      return;
+    }
+
+    setAllSheetCells(prev => {
+      const currentSheetCells = { ...(prev[activeSheet] || {}) };
+      if (!imageData) {
+        if (currentSheetCells[cellKey]) {
+          const { image, ...rest } = currentSheetCells[cellKey];
+          currentSheetCells[cellKey] = rest;
+        }
+      } else if (asFormula) {
+        currentSheetCells[cellKey] = {
+          ...currentSheetCells[cellKey],
+          formula: `=IMAGE("${imageData.url}")`,
+          value: imageData.alt || '[Image]',
+          image: imageData,
+        };
+      } else {
+        currentSheetCells[cellKey] = {
+          ...currentSheetCells[cellKey],
+          value: imageData.alt || '[Image]',
+          image: imageData,
+        };
+      }
+
+      const updatedAll = {
+        ...prev,
+        [activeSheet]: currentSheetCells,
+      };
+
+      isLocalMutationRef.current = true;
+      triggerFirestoreSave(title, updatedAll, sheets);
+      return updatedAll;
+    });
+
+    const actionText = imageData 
+      ? `Inserted image in ${cellKey} (${activeSheet})` 
+      : `Removed image from ${cellKey} (${activeSheet})`;
+    const logEntry = {
+      action: actionText,
+      timestamp: new Date().toISOString(),
+      userId: user?.email || 'User'
+    };
+    setAuditLogs(prev => [logEntry, ...prev]);
+    if (activeSpreadsheetId) {
+      recordAuditLog(activeSpreadsheetId, user?.email || 'User', actionText);
+    }
+
+    setIsImageModalOpen(false);
+  };
 
   const handleInsertFormula = (formulaTemp: string) => {
     setFormulaValue(formulaTemp);
@@ -742,6 +1209,7 @@ export default function App() {
         }}
         onOpenShare={() => setIsShareOpen(true)}
         onOpenCharts={() => setIsChartsOpen(true)}
+        onOpenAIAnalysis={() => setIsAIAnalysisOpen(true)}
         onOpenPlugins={() => setIsPluginsOpen(true)}
         onOpenHistory={() => setIsHistoryOpen(true)}
         onExportCSV={handleExportCSV}
@@ -758,6 +1226,7 @@ export default function App() {
         onOpenPlanQuota={() => setIsPlanQuotaOpen(true)}
         quotaStatus={quotaStatus}
         onOpenRenderDeploy={() => setIsRenderDeployOpen(true)}
+        onOpenSimulation={() => setIsSimulationOpen(true)}
       />
 
       {/* Viewer Mode RBAC Banner */}
@@ -778,10 +1247,23 @@ export default function App() {
       <Toolbar
         onFormat={handleFormat}
         onInsertFormula={handleInsertFormula}
-        onAddRow={() => setRowCount(prev => prev + 10)}
+        onAddRow={() => setRowCount(prev => prev + 1000)}
         onAddCol={() => setColCount(prev => prev + 5)}
         onClearSelected={handleClearSelected}
         onAutoSumSelected={handleAutoSumSelected}
+        onCopySelected={handleCopySelected}
+        onPasteSelected={handlePasteSelected}
+        onInsertRowAbove={() => handleInsertRowAbove()}
+        onInsertRowBelow={() => handleInsertRowBelow()}
+        onInsertColLeft={() => handleInsertColLeft()}
+        onInsertColRight={() => handleInsertColRight()}
+        onDeleteRow={() => handleDeleteRow()}
+        onDeleteCol={() => handleDeleteCol()}
+        onOpenImageModal={() => {
+          setImageTargetCell(selectedCell);
+          setIsImageModalOpen(true);
+        }}
+        onOpenAIAnalysis={() => setIsAIAnalysisOpen(true)}
         selectedCellsCount={selectedTargetCells.length}
         selectionLabel={selectionLabel}
         theme={theme}
@@ -799,6 +1281,9 @@ export default function App() {
       <SpreadsheetGrid
         cells={currentCells}
         onCellChange={handleCellChange}
+        onBatchPaste={handleBatchPaste}
+        onViewportChange={handleViewportChange}
+        isRangeLoading={isRangeLoading}
         selectedCell={selectedCell}
         setSelectedCell={(cell) => {
           setSelectedCell(cell);
@@ -806,6 +1291,8 @@ export default function App() {
         }}
         selectionRange={selectionRange}
         setSelectionRange={setSelectionRange}
+        copiedRange={copiedRange}
+        setCopiedRange={setCopiedRange}
         formulaValue={formulaValue}
         setFormulaValue={setFormulaValue}
         rowCount={rowCount}
@@ -814,6 +1301,17 @@ export default function App() {
         activeSheet={activeSheet}
         setActiveSheet={setActiveSheet}
         onAddSheet={handleAddSheet}
+        onInsertRowAbove={handleInsertRowAbove}
+        onInsertRowBelow={handleInsertRowBelow}
+        onInsertColLeft={handleInsertColLeft}
+        onInsertColRight={handleInsertColRight}
+        onDeleteRow={handleDeleteRow}
+        onDeleteCol={handleDeleteCol}
+        onClearSelected={handleClearSelected}
+        onOpenImageModal={(cellKey) => {
+          setImageTargetCell(cellKey);
+          setIsImageModalOpen(true);
+        }}
         collaboratorCursors={collaboratorsPresence
           .filter(c => c.activeSheet === activeSheet)
           .map(c => ({
@@ -941,6 +1439,54 @@ export default function App() {
         isOpen={isHistoryOpen}
         onClose={() => setIsHistoryOpen(false)}
         logs={auditLogs}
+        theme={theme}
+      />
+
+      <ImageInsertModal
+        isOpen={isImageModalOpen}
+        onClose={() => setIsImageModalOpen(false)}
+        targetCell={imageTargetCell}
+        currentImage={currentCells[imageTargetCell]?.image || null}
+        onSaveImage={handleSaveImage}
+        theme={theme}
+      />
+
+      <AIDataAnalysisModal
+        isOpen={isAIAnalysisOpen}
+        onClose={() => setIsAIAnalysisOpen(false)}
+        spreadsheetTitle={title}
+        activeSheetName={activeSheet}
+        sheetCells={currentCells}
+        selectedRange={selectionRange ? `${selectionRange.start}:${selectionRange.end}` : selectedCell}
+        onApplyFormula={(targetCell, formula) => {
+          handleCellChange(targetCell, '', formula);
+        }}
+        onOpenCharts={() => {
+          setIsAIAnalysisOpen(false);
+          setIsChartsOpen(true);
+        }}
+        theme={theme}
+      />
+
+      <SimulationModal
+        isOpen={isSimulationOpen}
+        onClose={() => setIsSimulationOpen(false)}
+        spreadsheetId={activeSpreadsheetId || 'demo_sheet'}
+        sheetName={activeSheet}
+        onApplyResultsToSheet={(convergedCells) => {
+          setAllSheetCells((prev) => {
+            const next = {
+              ...prev,
+              [activeSheet]: {
+                ...prev[activeSheet],
+                ...convergedCells,
+              },
+            };
+            triggerFirestoreSave(title, next, sheets);
+            return next;
+          });
+          globalRangeCache.updateLocalEdits(activeSheet, convergedCells);
+        }}
         theme={theme}
       />
 
